@@ -1,0 +1,29 @@
+# Dependencies
+node_modules
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Build output
+dist
+build
+.vite
+
+# Environment files (NEVER commit secrets)
+.env
+.env.local
+.env.development.local
+.env.production.local
+.env.test.local
+
+# Vercel
+.vercel
+.netlify
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.log
+*.swp
+.idea
+.vscode
