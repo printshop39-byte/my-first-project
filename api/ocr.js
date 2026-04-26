@@ -4,32 +4,15 @@
  * Serverless proxy for the Anthropic Messages API. Holds the
  * ANTHROPIC_API_KEY server-side so it never reaches the browser.
  *
- * Frontend POSTs JSON of shape:
- *   { messages: [...] }   // standard Anthropic messages array
- *
- * The proxy injects model + headers + max_tokens and forwards to
- * https://api.anthropic.com/v1/messages, then returns Anthropic's
- * response unchanged (so the existing parsing in <Tool/> keeps working).
- *
- * Compatible with Vercel Functions and Netlify Functions (default
- * Node.js handler signature). For self-hosting on Hostinger Cloud
- * Node.js, wrap this in an Express route.
- *
- * Required env var:  ANTHROPIC_API_KEY
- *   Vercel:    add in Project → Settings → Environment Variables
- *   Netlify:   Site settings → Environment variables
- *   Hostinger: .env or hosting control panel → Environment variables
- *
- * Get a key at: https://console.anthropic.com/settings/keys
+ * Adds the `anthropic-beta: pdfs-2024-09-25` header which is required
+ * to send PDF documents in the messages content array.
  */
 
-// You can override per-request by sending {"model": "..."} in the body.
 const DEFAULT_MODEL = "claude-sonnet-4-5-20250929";
-const DEFAULT_MAX_TOKENS = 1024;
+const DEFAULT_MAX_TOKENS = 2048;
 
 export default async function handler(req, res) {
-  // CORS — allow the frontend to call this even if hosted on a different
-  // origin (e.g. static frontend on Hostinger + serverless on Vercel).
+  // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -45,12 +28,11 @@ export default async function handler(req, res) {
   if (!apiKey) {
     return res.status(500).json({
       error:
-        "ANTHROPIC_API_KEY is not configured. Add it as an environment variable in your hosting provider.",
+        "ANTHROPIC_API_KEY is not configured. Add it in Vercel → Settings → Environment Variables.",
     });
   }
 
   try {
-    // Vercel parses JSON automatically; Netlify gives a string.
     const body =
       typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
 
@@ -60,13 +42,26 @@ export default async function handler(req, res) {
       });
     }
 
+    // Detect if any message contains a PDF document — if so, attach beta header.
+    const hasPdf = body.messages.some((m) =>
+      Array.isArray(m.content) &&
+      m.content.some(
+        (c) => c?.type === "document" && c?.source?.media_type === "application/pdf"
+      )
+    );
+
+    const headers = {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+    };
+    if (hasPdf) {
+      headers["anthropic-beta"] = "pdfs-2024-09-25";
+    }
+
     const upstream = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
+      headers,
       body: JSON.stringify({
         model: body.model || DEFAULT_MODEL,
         max_tokens: body.max_tokens || DEFAULT_MAX_TOKENS,
@@ -75,11 +70,15 @@ export default async function handler(req, res) {
     });
 
     const data = await upstream.json();
+
+    // Forward the upstream status code (Anthropic might return 400/401/429/etc.)
+    // so the frontend gets the real error instead of a generic 500.
     return res.status(upstream.status).json(data);
   } catch (err) {
     console.error("[/api/ocr] error:", err);
-    return res
-      .status(500)
-      .json({ error: err?.message || "OCR proxy request failed." });
+    return res.status(500).json({
+      error: err?.message || "OCR proxy request failed.",
+      stack: err?.stack,
+    });
   }
 }
